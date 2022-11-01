@@ -1,4 +1,4 @@
-"""The Mealplanner integration."""
+"""The Meal planner integration."""
 from http import HTTPStatus
 import logging
 from typing import Any
@@ -12,7 +12,7 @@ from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant, callback
 from homeassistant.util.json import load_json, save_json
 
-from .const import DOMAIN
+from .const import DOMAIN, ICON, NAME, URL_BASE, URL_FRONTEND
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -42,17 +42,35 @@ SCHEMA_WEBSOCKET_UPDATE_WEEK = websocket_api.BASE_COMMAND_MESSAGE_SCHEMA.extend(
 
 
 async def async_setup_entry(hass: HomeAssistant, config_entry: ConfigEntry) -> bool:
-    """Set up mealplanner from config flow."""
+    """Set up meal planner from config flow."""
 
-    data = hass.data[DOMAIN] = MealplannerData(hass)
+    data = hass.data[DOMAIN] = MealPlannerData(hass)
     await data.async_load()
 
-    hass.http.register_view(MealplannerView)
-    hass.http.register_view(UpdateMealplannerView)
+    hass.http.register_view(MealPlannerView)
+    hass.http.register_view(UpdateMealPlannerView)
 
-    # frontend.async_register_built_in_panel(
-    #     hass, "mealplanner", "mealplanner", "mdi:food"
-    # )
+    hass.http.register_static_path(
+        URL_BASE,
+        hass.config.path(URL_FRONTEND),
+    )
+
+    if DOMAIN not in hass.data.get("frontend_panels", {}):
+        frontend.async_register_built_in_panel(
+            component_name="custom",
+            sidebar_title=NAME,
+            sidebar_icon=ICON,
+            frontend_url_path=DOMAIN,
+            config={
+                "_panel_custom": {
+                    "name": "meal-planner-frontend",
+                    "embed_iframe": True,
+                    "trust_external": False,
+                    "module_url": f"/meal-planner-frontend/main.js",
+                }
+            },
+            require_admin=False,
+        )
 
     websocket_api.async_register_command(
         hass,
@@ -70,11 +88,11 @@ async def async_setup_entry(hass: HomeAssistant, config_entry: ConfigEntry) -> b
     return True
 
 
-class MealplannerData:
-    """Class to hold mealplanner data."""
+class MealPlannerData:
+    """Class to hold meal planner data."""
 
     def __init__(self, hass):
-        """Initialize the mealplanner."""
+        """Initialize the meal planner."""
         self.hass = hass
         self.mealplan: dict[int, dict[int, dict[str, dict[str, str]]]] = {}
 
@@ -136,8 +154,8 @@ class MealplannerData:
         save_json(self.hass.config.path(PERSISTENCE), self.mealplan)
 
 
-class MealplannerView(http.HomeAssistantView):
-    """View to retrieve mealplanner content."""
+class MealPlannerView(http.HomeAssistantView):
+    """View to retrieve meal planner content."""
 
     url = "/api/mealplanner/{year}/{week}"
     name = "api:mealplanner:year:week"
@@ -149,8 +167,8 @@ class MealplannerView(http.HomeAssistantView):
         )
 
 
-class UpdateMealplannerView(http.HomeAssistantView):
-    """View to update mealplanner content."""
+class UpdateMealPlannerView(http.HomeAssistantView):
+    """View to update meal planner content."""
 
     url = "/api/mealplanner/{year}/{week}/{day}"
     name = "api:mealplanner:year:week:day"
