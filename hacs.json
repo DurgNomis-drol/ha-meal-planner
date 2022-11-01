@@ -1,0 +1,8 @@
+{
+    "name": "Meal planner",
+    "domains": [],
+    "homeassistant": "2022.11.0",
+    "iot_class": ["Local Push"],
+    "zip_release": true,
+    "filename": "meal-planner.zip"
+  }
