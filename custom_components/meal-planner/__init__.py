@@ -57,6 +57,7 @@ async def async_setup_entry(hass: HomeAssistant, config_entry: ConfigEntry) -> b
 
     if DOMAIN not in hass.data.get("frontend_panels", {}):
         frontend.async_register_built_in_panel(
+            hass,
             component_name="custom",
             sidebar_title=NAME,
             sidebar_icon=ICON,
@@ -71,6 +72,10 @@ async def async_setup_entry(hass: HomeAssistant, config_entry: ConfigEntry) -> b
             },
             require_admin=False,
         )
+
+    # frontend.async_register_built_in_panel(
+    #     hass, "mealplanner", "mealplanner", "mdi:food"
+    # )
 
     websocket_api.async_register_command(
         hass,
