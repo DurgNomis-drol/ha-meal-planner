@@ -4,7 +4,7 @@ import logging
 from typing import Any
 
 import voluptuous as vol
-import datetime
+from datetime import datetime
 
 
 from homeassistant.components import frontend, http, websocket_api
@@ -99,46 +99,42 @@ class MealPlannerData:
     def __init__(self, hass):
         """Initialize the meal planner."""
         self.hass = hass
-        self.mealplan: dict[int, dict[int, dict[str, dict[str, str]]]] = {}
+        self.mealplan: dict[int, dict[int, dict[int, dict[str, Any]]]] = {}
 
-    async def async_get_week(
+    async def async_get_date(
         self,
-        year: str = datetime.date.today().isocalendar().year,
-        week: str = datetime.date.today().isocalendar().week,
+        date: datetime,
     ):
-        """Return a week from the mealplan, add week if missing."""
+        """Return a date from the mealplan, add date if missing."""
 
-        def add_week(year: str, week: str):
-            """Add a new week to the mealplan."""
-            weekday = {"meal": None, "description": None}
-            complete_week = {
-                "monday": weekday,
-                "tuesday": weekday,
-                "wednesday": weekday,
-                "thursday": weekday,
-                "friday": weekday,
-                "saturday": weekday,
-                "sunday": weekday,
-            }
-            if year in self.mealplan:
-                self.mealplan[year].update({week: complete_week})
-            else:
-                self.mealplan.update({year: {}})
-                self.mealplan[year].update({week: complete_week})
+        def add_date(date: datetime):
+            """Add a date to the mealplan."""
 
-        if year not in self.mealplan or week not in self.mealplan[year]:
-            add_week(year, week)
+            item = {date.day: {"meal": None, "description": None}}
+
+            if date.year not in self.mealplan:
+                self.mealplan.update({date.year: {}})
+
+            if date.month not in self.mealplan[date.year]:
+                self.mealplan[date.year].update({date.month: {}})
+
+            if date.day in self.mealplan[date.year][date.month]:
+                raise KeyError("Key already exists")
+            self.mealplan[date.year][date.month].update(item)
+
+        if date.year not in self.mealplan or date.month not in self.mealplan[date.year]:
+            add_date(date)
 
         await self.hass.async_add_executor_job(self.save)
 
-        return self.mealplan[year][week]
+        return self.mealplan[date.year][date.month][date.day]
 
-    async def async_update(self, year, week, day, data, context=None):
+    async def async_update(self, date: datetime, data: dict, context=None):
         """Update mealplan."""
-        if year not in self.mealplan and week not in self.mealplan[year]:
+        if date.year not in self.mealplan or date.month not in self.mealplan[date.year] or date.day not in self.mealplan[date.year][date.month]:
             raise KeyError
 
-        day = self.mealplan[year][week][day]
+        day = self.mealplan[date.year][date.month][date.day]
         day.update(data)
 
         await self.hass.async_add_executor_job(self.save)
