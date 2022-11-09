@@ -4,7 +4,7 @@ import logging
 from typing import Any
 
 import voluptuous as vol
-from datetime import datetime
+from datetime import date, timedelta
 
 
 from homeassistant.components import frontend, http, websocket_api
@@ -18,23 +18,28 @@ _LOGGER = logging.getLogger(__name__)
 
 PERSISTENCE = ".mealplanner.json"
 
-WS_TYPE_MEALPLANNER_WEEK = "mealplanner/year/week"
-WS_TYPE_MEALPLANNER_WEEK_UPDATE = "mealplanner/year/week/update"
+WS_TYPE_MEALPLANNER_DATE = "mealplanner/date"
+WS_TYPE_MEALPLANNER_DAYS = "mealplanner/days"
+WS_TYPE_MEALPLANNER_DATE_UPDATE = "mealplanner/date/update"
 
-SCHEMA_WEBSOCKET_WEEK = websocket_api.BASE_COMMAND_MESSAGE_SCHEMA.extend(
+SCHEMA_WEBSOCKET_DATE = websocket_api.BASE_COMMAND_MESSAGE_SCHEMA.extend(
     {
-        vol.Required("type"): WS_TYPE_MEALPLANNER_WEEK,
-        vol.Optional("year"): int,
-        vol.Optional("week"): int,
+        vol.Required("type"): WS_TYPE_MEALPLANNER_DATE,
+        vol.Optional("date"): datetime
+    }
+)
+SCHEMA_WEBSOCKET_DAYS = websocket_api.BASE_COMMAND_MESSAGE_SCHEMA.extend(
+    {
+        vol.Required("type"): WS_TYPE_MEALPLANNER_DAYS,
+        vol.Optional("date"): datetime,
+        vol.Optional("days"): int
     }
 )
 
-SCHEMA_WEBSOCKET_UPDATE_WEEK = websocket_api.BASE_COMMAND_MESSAGE_SCHEMA.extend(
+SCHEMA_WEBSOCKET_UPDATE_DATE = websocket_api.BASE_COMMAND_MESSAGE_SCHEMA.extend(
     {
-        vol.Required("type"): WS_TYPE_MEALPLANNER_WEEK_UPDATE,
-        vol.Required("year"): int,
-        vol.Required("week"): int,
-        vol.Required("day"): str,
+        vol.Required("type"): WS_TYPE_MEALPLANNER_DATE_UPDATE,
+        vol.Required("date"): datetime,
         vol.Required("meal"): str,
         vol.Optional("description"): str,
     }
@@ -47,7 +52,8 @@ async def async_setup_entry(hass: HomeAssistant, config_entry: ConfigEntry) -> b
     data = hass.data[DOMAIN] = MealPlannerData(hass)
     await data.async_load()
 
-    hass.http.register_view(MealPlannerView)
+    hass.http.register_view(MealPlannerDateView)
+    hass.http.register_view(MealPlannerDaysView)
     hass.http.register_view(UpdateMealPlannerView)
 
     hass.http.register_static_path(
@@ -79,15 +85,21 @@ async def async_setup_entry(hass: HomeAssistant, config_entry: ConfigEntry) -> b
 
     websocket_api.async_register_command(
         hass,
-        WS_TYPE_MEALPLANNER_WEEK,
-        websocket_handle_week,
-        SCHEMA_WEBSOCKET_WEEK,
+        WS_TYPE_MEALPLANNER_DATE,
+        websocket_handle_date,
+        SCHEMA_WEBSOCKET_DATE,
     )
     websocket_api.async_register_command(
         hass,
-        WS_TYPE_MEALPLANNER_WEEK_UPDATE,
+        WS_TYPE_MEALPLANNER_DAYS,
+        websocket_handle_days,
+        SCHEMA_WEBSOCKET_DAYS,
+    )
+    websocket_api.async_register_command(
+        hass,
+        WS_TYPE_MEALPLANNER_DATE_UPDATE,
         websocket_handle_update,
-        SCHEMA_WEBSOCKET_UPDATE_WEEK,
+        SCHEMA_WEBSOCKET_UPDATE_DATE,
     )
 
     return True
@@ -100,36 +112,53 @@ class MealPlannerData:
         """Initialize the meal planner."""
         self.hass = hass
         self.mealplan: dict[int, dict[int, dict[int, dict[str, Any]]]] = {}
+    
+    async def _async_add_date(self, date: date):
+        """Add a date to the mealplan."""
 
-    async def async_get_date(
-        self,
-        date: datetime,
-    ):
-        """Return a date from the mealplan, add date if missing."""
+        item = {date.day: {"meal": None, "description": None}}
 
-        def add_date(date: datetime):
-            """Add a date to the mealplan."""
+        if date.year not in self.mealplan:
+            self.mealplan.update({date.year: {}})
 
-            item = {date.day: {"meal": None, "description": None}}
+        if date.month not in self.mealplan[date.year]:
+            self.mealplan[date.year].update({date.month: {}})
 
-            if date.year not in self.mealplan:
-                self.mealplan.update({date.year: {}})
-
-            if date.month not in self.mealplan[date.year]:
-                self.mealplan[date.year].update({date.month: {}})
-
-            if date.day in self.mealplan[date.year][date.month]:
-                raise KeyError("Key already exists")
-            self.mealplan[date.year][date.month].update(item)
-
-        if date.year not in self.mealplan or date.month not in self.mealplan[date.year]:
-            add_date(date)
+        if date.day in self.mealplan[date.year][date.month]:
+            raise KeyError("Key already exists")
+        self.mealplan[date.year][date.month].update(item)
 
         await self.hass.async_add_executor_job(self.save)
 
-        return self.mealplan[date.year][date.month][date.day]
+    async def async_get_date(
+        self,
+        date: date,
+    ):
+        """Return a date from the mealplan, add date if missing."""
 
-    async def async_update(self, date: datetime, data: dict, context=None):
+        if date.year not in self.mealplan or date.month not in self.mealplan[date.year]:
+            await self._async_add_date(date)
+
+        return self.mealplan[date.year][date.month][date.day]
+    
+    async def async_get_days(self, startdate: date, days: int = 7):
+        """Retrieve mealplan for x number of days."""       
+
+        def calculate_dates(startdate: date, days: int):
+            dates = {}
+            for i in range(0, days):
+                d = startdate + timedelta(days=i)
+                dates.update({d: {}})
+            return dates
+        
+        d = calculate_dates(startdate, days)
+        
+        for key, value in d.items():
+            d[key].update(await self.async_get_date(key))
+
+        return d
+
+    async def async_update(self, date: date, data: dict, context=None):
         """Update mealplan."""
         if date.year not in self.mealplan or date.month not in self.mealplan[date.year] or date.day not in self.mealplan[date.year][date.month]:
             raise KeyError
@@ -155,26 +184,37 @@ class MealPlannerData:
         save_json(self.hass.config.path(PERSISTENCE), self.mealplan)
 
 
-class MealPlannerView(http.HomeAssistantView):
+class MealPlannerDateView(http.HomeAssistantView):
     """View to retrieve meal planner content."""
 
-    url = "/api/mealplanner/{year}/{week}"
-    name = "api:mealplanner:year:week"
+    url = "/api/mealplanner/{ts}"
+    name = "api:mealplanner:ts"
 
-    async def get(self, request, year, week):
+    async def get(self, request, ts):
         """Retrieve mealplan."""
         return self.json(
-            await request.app["hass"].data[DOMAIN].async_get_week(year, week)
+            await request.app["hass"].data[DOMAIN].async_get_date(date.fromtimestamp(ts))
         )
 
+class MealPlannerDaysView(http.HomeAssistantView):
+    """View to retrieve multiple days."""
+
+    url = "/api/mealplanner/{ts}/{days}"
+    name = "api:mealplanner:ts:days"
+
+    async def get(self, request, ts, days):
+        """Retrieve mealplan."""
+        return self.json(
+            await request.app["hass"].data[DOMAIN].async_get_days(date.fromtimestamp(ts), days)
+        )
 
 class UpdateMealPlannerView(http.HomeAssistantView):
     """View to update meal planner content."""
 
-    url = "/api/mealplanner/{year}/{week}/{day}"
-    name = "api:mealplanner:year:week:day"
+    url = "/api/mealplanner/{ts}"
+    name = "api:mealplanner:ts"
 
-    async def post(self, request, year, week, day):
+    async def post(self, request, ts):
         """Update a mealplan."""
         data = await request.json()
 
@@ -182,26 +222,39 @@ class UpdateMealPlannerView(http.HomeAssistantView):
             meal = (
                 await request.app["hass"]
                 .data[DOMAIN]
-                .async_update(year, week, day, data)
+                .async_update(date.fromtimestamp(ts), data)
             )
             return self.json(meal)
         except KeyError:
-            return self.json_message("Week not found", HTTPStatus.NOT_FOUND)
+            return self.json_message("Date not found", HTTPStatus.NOT_FOUND)
         except vol.Invalid:
-            return self.json_message("Week not found", HTTPStatus.BAD_REQUEST)
+            return self.json_message("Date not found", HTTPStatus.BAD_REQUEST)
 
 
 @websocket_api.async_response
-async def websocket_handle_week(
+async def websocket_handle_date(
     hass: HomeAssistant,
     connection: websocket_api.ActiveConnection,
     msg: dict[str, Any],
 ) -> None:
     """Handle get mealplan."""
-    year = msg.pop("year")
-    week = msg.pop("week")
+    date = msg.pop("date")
 
-    data = await hass.data[DOMAIN].async_get_week(year, week)
+    data = await hass.data[DOMAIN].async_get_date(date)
+    connection.send_message(websocket_api.result_message(msg["id"], data))
+
+
+@websocket_api.async_response
+async def websocket_handle_days(
+    hass: HomeAssistant,
+    connection: websocket_api.ActiveConnection,
+    msg: dict[str, Any],
+) -> None:
+    """Handle get number days."""
+    date = msg.pop("date")
+    days = msg.pop("days")
+
+    data = await hass.data[DOMAIN].async_get_days(date, days)
     connection.send_message(websocket_api.result_message(msg["id"], data))
 
 
@@ -213,18 +266,16 @@ async def websocket_handle_update(
 ) -> None:
     """Handle update mealplan."""
     msg_id = msg.pop("id")
-    year = msg.pop("year")
-    week = msg.pop("week")
-    day = msg.pop("day")
+    date = msg.pop("date")
     msg.pop("type")
     data = msg
 
     try:
         meal = await hass.data[DOMAIN].async_update(
-            year, week, day, data, connection.context(msg)
+            date, data, connection.context(msg)
         )
         connection.send_message(websocket_api.result_message(msg_id, meal))
     except KeyError:
         connection.send_message(
-            websocket_api.error_message(msg_id, "week_not_found", "Week not found")
+            websocket_api.error_message(msg_id, "date_not_found", "Date not found")
         )
